@@ -36,8 +36,8 @@ Servo continuousServo;  // FS90R on D12
 Servo positionServo;    // MG90S on D11
 
 // Pot 1 (A4) - FS90R
-const int potCenter = 891;
-const int deadzone = 50;
+const int potCenter = 850;
+const int deadzone = 60;
 
 // Joystick settings
 const int joyCenter = 512;
@@ -46,7 +46,9 @@ const int joyDeadzone = 50;
 // Exponential smoothing 
 float potSmoothed = 512.0;
 float pot2Smoothed = 512.0;
-const float alpha = 0.15;  // Smoothing factor (0.1-0.3 works well)
+float servo2AngleSmoothed = 90.0;  // Second stage smoothing for MG90S
+const float alpha = 0.15;
+const float alpha2 = 0.1;  // Separate alpha for S2, lower = smoother
 
 // Acceleration ramping variables
 int currentLeftSpeed = 0;
@@ -120,11 +122,17 @@ void setMotor(int pwmPin, int in1Pin, int in2Pin, int speed) {
 void loop() {
   // Read inputs
   int xValue = analogRead(joystickXPin);
-  int yValue = analogRead(joystickYPin);
+  int yValue = map(analogRead(joystickYPin), 0, 1023, 1023, 0);  // Y axis flipped
   int potValueRaw = analogRead(potPin);
-  int pot2ValueRaw = analogRead(pot2Pin);
+
+  // Average 8 readings for pot2 to reduce noise
+  int pot2ValueRaw = 0;
+  for (int i = 0; i < 8; i++) {
+    pot2ValueRaw += analogRead(pot2Pin);
+  }
+  pot2ValueRaw /= 8;
   
-  //Apply exponential smoothing
+  // Apply exponential smoothing
   potSmoothed = (alpha * potValueRaw) + ((1.0 - alpha) * potSmoothed);
   pot2Smoothed = (alpha * pot2ValueRaw) + ((1.0 - alpha) * pot2Smoothed);
   
@@ -143,10 +151,13 @@ void loop() {
   
   continuousServo.write(servoSpeed);
   
-  // Control MG90S
+  // Control MG90S with second stage smoothing and deadband
   int servoAngle = map((int)pot2Smoothed, 0, ADC_MAX, 0, SERVO_MAX_ANGLE);
   servoAngle = constrain(servoAngle, 0, SERVO_MAX_ANGLE);
-  positionServo.write(servoAngle);
+  servo2AngleSmoothed = (alpha2 * servoAngle) + ((1.0 - alpha2) * servo2AngleSmoothed);
+  if (abs((int)servo2AngleSmoothed - positionServo.read()) > 1) {
+    positionServo.write((int)servo2AngleSmoothed);
+  }
   
   // Motor control with joystick
   int motorLeftSpeed = 0;
@@ -244,7 +255,7 @@ void loop() {
   Serial.print(" P2:");
   Serial.print((int)pot2Smoothed);
   Serial.print(" S2:");
-  Serial.println(servoAngle);
+  Serial.println((int)servo2AngleSmoothed);
   
   delay(10); 
 }
