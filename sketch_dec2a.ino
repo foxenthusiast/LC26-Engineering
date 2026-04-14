@@ -5,9 +5,9 @@ const int joystickXPin = A0;
 const int joystickYPin = A1;
 const int potPin = A4;
 const int pot2Pin = A6;
-const int buzzerPin = 13;
+const int buzzerPin = 4;
 const int servoPin = 12;
-const int servo2Pin = 11;
+const int servo2Pin = A2;
 
 // TB6612FNG Motor Driver Pins
 const int PWMA = 3;
@@ -21,6 +21,7 @@ const int PWMB = 6;
 // Constants
 const int ADC_MAX = 1023;
 const int PWM_MAX = 255;
+const int speedLimit = 255;
 const int SERVO_MAX_ANGLE = 180;
 const int SERVO_CENTER = 90;
 
@@ -33,27 +34,24 @@ bool buzzerActive = false;
 
 // Servo control
 Servo continuousServo;  // FS90R on D12
-Servo positionServo;    // MG90S on D11
+Servo positionServo;    // SG92R on A2
 
 // Pot 1 (A4) - FS90R
-const int potCenter = 850;
+const int potCenter = 860;
 const int deadzone = 60;
 
 // Joystick settings
 const int joyCenter = 512;
 const int joyDeadzone = 50;
 
-// Exponential smoothing 
+// Exponential smoothing (FS90R and motors only)
 float potSmoothed = 512.0;
-float pot2Smoothed = 512.0;
-float servo2AngleSmoothed = 90.0;  // Second stage smoothing for MG90S
 const float alpha = 0.15;
-const float alpha2 = 0.1;  // Separate alpha for S2, lower = smoother
 
 // Acceleration ramping variables
 int currentLeftSpeed = 0;
 int currentRightSpeed = 0;
-const int maxAcceleration = 20;
+const int maxAcceleration = 10;
 const int directionChangeDelay = 10;
 unsigned long lastDirectionChange = 0;
 int lastLeftDirection = 0;
@@ -84,7 +82,6 @@ void setup() {
   // Initialize smoothed values with first readings
   delay(100);
   potSmoothed = analogRead(potPin);
-  pot2Smoothed = analogRead(pot2Pin);
 }
 
 inline int getDirection(int speed) {
@@ -124,17 +121,9 @@ void loop() {
   int xValue = analogRead(joystickXPin);
   int yValue = map(analogRead(joystickYPin), 0, 1023, 1023, 0);  // Y axis flipped
   int potValueRaw = analogRead(potPin);
-
-  // Average 8 readings for pot2 to reduce noise
-  int pot2ValueRaw = 0;
-  for (int i = 0; i < 8; i++) {
-    pot2ValueRaw += analogRead(pot2Pin);
-  }
-  pot2ValueRaw /= 8;
   
-  // Apply exponential smoothing
+  // Apply exponential smoothing to FS90R pot only
   potSmoothed = (alpha * potValueRaw) + ((1.0 - alpha) * potSmoothed);
-  pot2Smoothed = (alpha * pot2ValueRaw) + ((1.0 - alpha) * pot2Smoothed);
   
   // Control FS90R
   int servoSpeed = SERVO_CENTER;
@@ -143,7 +132,6 @@ void loop() {
   if (potSmoothedInt > potCenter + deadzone) {
     servoSpeed = map(potSmoothedInt, potCenter + deadzone, ADC_MAX, SERVO_CENTER, SERVO_MAX_ANGLE);
     servoSpeed = constrain(servoSpeed, SERVO_CENTER, SERVO_MAX_ANGLE);
-    
   } else if (potSmoothedInt < potCenter - deadzone) {
     servoSpeed = map(potSmoothedInt, 0, potCenter - deadzone, 0, SERVO_CENTER);
     servoSpeed = constrain(servoSpeed, 0, SERVO_CENTER);
@@ -151,13 +139,10 @@ void loop() {
   
   continuousServo.write(servoSpeed);
   
-  // Control MG90S with second stage smoothing and deadband
-  int servoAngle = map((int)pot2Smoothed, 0, ADC_MAX, 0, SERVO_MAX_ANGLE);
+  // Control SG92R - direct mapping, no smoothing
+  int servoAngle = map(analogRead(pot2Pin), 0, ADC_MAX, 0, SERVO_MAX_ANGLE);
   servoAngle = constrain(servoAngle, 0, SERVO_MAX_ANGLE);
-  servo2AngleSmoothed = (alpha2 * servoAngle) + ((1.0 - alpha2) * servo2AngleSmoothed);
-  if (abs((int)servo2AngleSmoothed - positionServo.read()) > 1) {
-    positionServo.write((int)servo2AngleSmoothed);
-  }
+  positionServo.write(servoAngle);
   
   // Motor control with joystick
   int motorLeftSpeed = 0;
@@ -183,9 +168,9 @@ void loop() {
     xAxis = constrain(xAxis, -PWM_MAX, 0);
   }
   
-  // Tank Steering motor control
-  motorLeftSpeed = constrain(yAxis + xAxis, -PWM_MAX, PWM_MAX);
-  motorRightSpeed = constrain(yAxis - xAxis, -PWM_MAX, PWM_MAX);
+  // Tank steering motor control with speed limit
+  motorLeftSpeed = constrain(yAxis + xAxis, -speedLimit, speedLimit);
+  motorRightSpeed = constrain(yAxis - xAxis, -speedLimit, speedLimit);
   
   // Detect direction changes
   int targetLeftDirection = getDirection(motorLeftSpeed);
@@ -239,7 +224,7 @@ void loop() {
     buzzerActive = false;
   }
   
-  // Serial output 
+  // Serial output
   Serial.print("X:");
   Serial.print(xValue);
   Serial.print(" Y:");
@@ -252,10 +237,8 @@ void loop() {
   Serial.print(potSmoothedInt);
   Serial.print(" S1:");
   Serial.print(servoSpeed);
-  Serial.print(" P2:");
-  Serial.print((int)pot2Smoothed);
   Serial.print(" S2:");
-  Serial.println((int)servo2AngleSmoothed);
+  Serial.println(servoAngle);
   
-  delay(10); 
+  delay(10);
 }
